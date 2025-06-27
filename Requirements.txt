@@ -1,0 +1,11 @@
+matplotlib
+shiny
+numpy
+pandas
+scikit-learn
+scipy
+seaborn
+plotly.express
+jinja2
+gseapy
+openpyxl
