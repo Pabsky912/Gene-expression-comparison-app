@@ -11,16 +11,16 @@ import matplotlib.patches as mpatches
 import matplotlib.lines as mlines
 import io
 
+all_gseapy_libraries = gp.get_library_name()
+# Pre-load MSigDB gene sets for both Human and Mouse
+gene_sets_human = gp.get_library(name='GO_Biological_Process_2023', organism='Human')
+gene_sets_mouse = gp.get_library(name='GO_Biological_Process_2023', organism='Mouse')
 
 
 # Read the file
 ##mousediv10 = pd.read_excel("C:\Users\Lenovo\OneDrive\Documentos\Bioinformatics\mouse_div10.xlsx" , index_col=0)
 #mousediv4 = pd.read_excel("C:\Users\Lenovo\OneDrive\Documentos\Bioinformatics\mouse_div4.xlsx" , index_col=0)
 #humn = pd.read_excel("C:\Users\Lenovo\OneDrive\Documentos\Bioinformatics\human_esc.xlsx" , index_col=0)
-
-# Pre-load MSigDB gene sets for both Human and Mouse
-gene_sets_human = gp.get_library(name='GO_Biological_Process_2023', organism='Human')
-gene_sets_mouse = gp.get_library(name='GO_Biological_Process_2023', organism='Mouse')
 
 app_ui = ui.page_fluid(
     ui.layout_sidebar(
@@ -35,15 +35,23 @@ app_ui = ui.page_fluid(
                 choices=["Human", "Mouse"],
                 selected="Mouse"
             ),
+            ui.input_select(
+                "gene_set_library",
+                "Select gene set library",
+                choices=all_gseapy_libraries,
+                selected="GO_Biological_Process_2023" if "GO_Biological_Process_2023" in all_gseapy_libraries else all_gseapy_libraries[0]
+            ),
             ui.input_selectize(
                 "gene_set_term",
                 "Select a gene set",
-                choices=[],  # Will be updated reactively
+                choices=[],
+                multiple=True,
             ),
             ui.input_file("user_gene_set", "Upload gene set", accept=[".csv", ".txt", ".xls", ".xlsx"]),
         ),
         ui.navset_tab(
-            ui.nav_panel("V2 Plot", output_widget("v2_comparison_plot"), ui.output_text("pearson_r_value"), ui.download_button("download_v2_plot", "Download V2 Plot PNG")),
+            ui.nav_panel("V2 Plot (Shape & Highlight)", ui.output_plot("v2_shape_highlight_plot"), ui.download_button("download_v2_shape_highlight_plot", "Download PNG"), ui.output_text("pearson_r_value"), ui.output_text("pearson_r_selected_gene_set"), ui.input_text("x_axis_label", "X Axis Label", value="Dataset 1 log2 fold change"), ui.input_text("y_axis_label", "Y Axis Label", value="Dataset 2 log2 fold change"), ui.input_text("plot_title", "Plot Title", value="V2 Plot (Shape & Highlight)"), ui.input_numeric("point_size", "Point Size", value=40, min=1, max=200, step=1),),
+            ui.nav_panel("V2 Plot (Plotly Shape & Highlight)", output_widget("v2_shape_highlight_plotly")),
             ui.nav_panel("Dataset 1 & 2", ui.output_table("preview1"), ui.output_table("preview2")),
             ui.nav_panel(   
                 "Gene Lists",
@@ -57,9 +65,6 @@ app_ui = ui.page_fluid(
                 ui.markdown("**User Uploaded Gene Names:**"),  
                 ui.output_table("user_uploaded_gene_names"),   
         ),
-            ui.nav_panel("Gene Set Highlight", ui.output_plot("gene_set_highlight_plot"),  ui.output_text("pearson_r_selected_gene_set"), ui.download_button("download_gene_set_highlight_plot", "Download Highlight Plot PNG")),
-            ui.nav_panel("V2 Plot (Shape & Highlight)", ui.output_plot("v2_shape_highlight_plot"), ui.download_button("download_v2_shape_highlight_plot", "Download PNG")),
-            ui.nav_panel("V2 Plot (Plotly Shape & Highlight)", output_widget("v2_shape_highlight_plotly")),
         )
     )
 )
@@ -107,7 +112,14 @@ def server(input: Inputs, output: Outputs, session: Session):
     
     @reactive.Calc
     def gene_set_dict():
-        return gene_sets_mouse if input.organism() == "Mouse" else gene_sets_human
+        lib = input.gene_set_library()
+        org = input.organism()
+        try:
+            # Try to load the selected library for the selected organism
+            return gp.get_library(name=lib, organism=org)
+        except Exception as e:
+            print(f"Error loading gene set library '{lib}' for organism '{org}': {e}")
+            return {}
     
     @output
     @render.table
@@ -120,68 +132,6 @@ def server(input: Inputs, output: Outputs, session: Session):
     def preview2():
         df = df2()
         return df.head(10) if df is not None else None
-
-    #v2 comparison table
-    @output
-    @render_widget
-    def v2_comparison_plot():
-        d1, d2 = df1(), df2()
-        if d1 is None or d2 is None:
-            return
-        # Merge datasets on gene index
-        merged = pd.merge(d1, d2, left_index=True, right_index=True, suffixes=("_1", "_2"))
-        # Calculate significance for each dataset
-        merged["significant_1"] = merged["padj_1"] < input.padj_threshold()
-        merged["significant_2"] = merged["padj_2"] < input.padj_threshold()
-        # Create a combined significance label for coloring
-        merged["significance"] = merged.apply(
-            lambda row: f"1:{'Yes' if row['significant_1'] else 'No'}, 2:{'Yes' if row['significant_2'] else 'No'}", axis=1
-        )
-        # Create the interactive scatter plot
-        fig = px.scatter(
-            merged,
-            x="log2_fold_change_1",
-            y="log2_fold_change_2",
-            color="significance",
-            hover_name=merged.index,  # Shows gene name
-            hover_data={
-                "log2_fold_change_1": True,
-                "log2_fold_change_2": True,
-                "significant_1": True,
-                "significant_2": True,
-            },
-            labels={
-                "log2_fold_change_1": "Dataset 1 log2 fold change",
-                "log2_fold_change_2": "Dataset 2 log2 fold change",
-                "significance": "Significant (1,2)"
-            },
-            title="Expression Comparison (Interactive)"
-        )
-        fig.update_traces(marker=dict(size=8, opacity=0.7))
-
-        # Toggle axes styling for Plotly
-        if not input.show_axes():
-            fig.update_layout(
-                xaxis=dict(showticklabels=False, showgrid=False, zeroline=False, title=""),
-                yaxis=dict(showticklabels=False, showgrid=False, zeroline=False, title=""),
-                showlegend=False,
-                title=""
-            )
-        # If input.show_axes() is True, default Plotly axes are shown
-        return fig
-    
-    @output
-    @render.text
-    def pearson_r_value():
-        d1, d2 = df1(), df2()
-        if d1 is None or d2 is None:
-            return "Upload both datasets to calculate Pearson R."
-        merged = pd.merge(d1, d2, left_index=True, right_index=True, suffixes=("_1", "_2"))
-        # Use log2_fold_change columns for correlation
-        if "log2_fold_change_1" not in merged or "log2_fold_change_2" not in merged:
-            return "log2_fold_change columns not found in both datasets."
-        r, p = pearsonr(merged["log2_fold_change_1"], merged["log2_fold_change_2"])
-        return f"Pearson R: {r:.5f} (p={p:.5g})"
     
     #tab for all gene lists - all genes, gpseea mouse and human gene sets
     @output
@@ -258,11 +208,16 @@ def server(input: Inputs, output: Outputs, session: Session):
     #3. Get the selected gene set from the dropdown
     @reactive.Calc
     def selected_gene_set():
-        term = input.gene_set_term()
-        if not term:
+        terms = input.gene_set_term()
+        if not terms:
             return set()
-        # Always uppercase for matching
-        return set([g.upper() for g in filtered_gene_set_dict().get(term, [])])
+        # Ensure terms is a list (it will be if multiple=True)
+        if isinstance(terms, str):
+            terms = [terms]
+        genes = set()
+        for term in terms:
+            genes.update([g.upper() for g in filtered_gene_set_dict().get(term, [])])
+        return genes
     
     # Read user-uploaded gene set (first row as header, first column as gene names)
     @reactive.Calc
@@ -284,27 +239,6 @@ def server(input: Inputs, output: Outputs, session: Session):
         dropdown_genes = selected_gene_set()
         uploaded_genes = user_uploaded_genes()
         return dropdown_genes.union(uploaded_genes)
-
-    @output
-    @render.plot
-    def gene_set_highlight_plot():
-        d1, d2 = df1(), df2()
-        if d1 is None or d2 is None:
-            return
-        merged = pd.merge(d1, d2, left_index=True, right_index=True, suffixes=("_1", "_2"))
-        highlight = highlight_genes()
-        merged["highlight"] = merged.index.isin(highlight)
-        fig, ax = plt.subplots()
-        ax.scatter(
-            merged["log2_fold_change_1"],
-            merged["log2_fold_change_2"],
-            c=merged["highlight"].map({True: "orange", False: "gray"}),
-            alpha=0.7
-        )
-        ax.set_xlabel("Dataset 1 log2 fold change")
-        ax.set_ylabel("Dataset 2 log2 fold change")
-        ax.set_title("Highlight: Selected Gene Set")
-        return fig
     
     @output
     @render.text
@@ -313,100 +247,15 @@ def server(input: Inputs, output: Outputs, session: Session):
         if d1 is None or d2 is None:
             return "Upload both datasets to calculate Pearson R."
         merged = pd.merge(d1, d2, left_index=True, right_index=True, suffixes=("_1", "_2"))
-        highlight_genes = selected_gene_set()
+        highlight = highlight_genes()
         # Only keep genes in the selected gene set
-        filtered = merged.loc[merged.index.isin(highlight_genes)].copy()
+        filtered = merged.loc[merged.index.isin(highlight)].copy()
         if filtered.shape[0] < 2:
             return "Not enough significant genes in the selected gene set."
         if "log2_fold_change_1" not in filtered or "log2_fold_change_2" not in filtered:
             return "log2_fold_change columns not found in both datasets."
         r, p = pearsonr(filtered["log2_fold_change_1"], filtered["log2_fold_change_2"])
-        return f"Pearson R (selected gene set, significant only): {r:.5f} (p={p:.5g})"
-
-    @output
-    @render.download(filename="v2_plot.png")
-    def download_v2_plot():
-        d1, d2 = df1(), df2()
-        if d1 is None or d2 is None:
-            return
-        merged = pd.merge(d1, d2, left_index=True, right_index=True, suffixes=("_1", "_2"))
-        x = merged["log2_fold_change_1"]
-        y = merged["log2_fold_change_2"]
-        min_val = min(x.min(), y.min())
-        max_val = max(x.max(), y.max())
-        merged["significant_1"] = merged["padj_1"] < input.padj_threshold()
-        merged["significant_2"] = merged["padj_2"] < input.padj_threshold()
-        merged["significance"] = merged.apply(
-            lambda row: f"1:{'Yes' if row['significant_1'] else 'No'}, 2:{'Yes' if row['significant_2'] else 'No'}", axis=1
-        )
-        color_map = {"1:Yes, 2:Yes": "green", "1:Yes, 2:No": "red", "1:No, 2:Yes": "orange", "1:No, 2:No": "gray"}
-        colors = merged["significance"].map(color_map).fillna("gray")
-        fig, ax = plt.subplots()
-        ax.scatter(x, y, c=colors, alpha=0.7)
-        if input.show_axes():
-            ax.set_xlabel("Dataset 1 log2 fold change")
-            ax.set_ylabel("Dataset 2 log2 fold change")
-            ax.set_title("V2 Plot (Standardized Axes)")
-            legend_patches = [
-                mpatches.Patch(color="green", label="1:Yes, 2:Yes"),
-                mpatches.Patch(color="red", label="1:Yes, 2:No"),
-                mpatches.Patch(color="orange", label="1:No, 2:Yes"),
-                mpatches.Patch(color="gray", label="1:No, 2:No"),
-            ]
-            ax.legend(handles=legend_patches, title="Significance")
-        else:
-            ax.set_xlabel("")
-            ax.set_ylabel("")
-            ax.set_title("")
-            ax.set_xticks([])
-            ax.set_yticks([])
-            ax.grid(False)
-        ax.set_xlim(min_val, max_val)
-        ax.set_ylim(min_val, max_val)
-        ax.plot([min_val, max_val], [min_val, max_val], "k--", alpha=0.5)
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png")
-        buf.seek(0)
-        yield buf.read()
-
-    @output
-    @render.download(filename="gene_set_highlight_plot.png")
-    def download_gene_set_highlight_plot():
-        import io
-        d1, d2 = df1(), df2()
-        if d1 is None or d2 is None:
-            return
-        merged = pd.merge(d1, d2, left_index=True, right_index=True, suffixes=("_1", "_2"))
-        highlight = highlight_genes()
-        x = merged["log2_fold_change_1"]
-        y = merged["log2_fold_change_2"]
-        min_val = min(x.min(), y.min())
-        max_val = max(x.max(), y.max())
-        merged["highlight"] = merged.index.isin(highlight)
-        fig, ax = plt.subplots()
-        ax.scatter(
-            x, y,
-            c=merged["highlight"].map({True: "orange", False: "gray"}),
-            alpha=0.7
-        )
-        if input.show_axes():
-            ax.set_xlabel("Dataset 1 log2 fold change")
-            ax.set_ylabel("Dataset 2 log2 fold change")
-            ax.set_title("Gene Set Highlight (Standardized Axes)")
-        else:
-            ax.set_xlabel("")
-            ax.set_ylabel("")
-            ax.set_title("")
-            ax.set_xticks([])
-            ax.set_yticks([])
-            ax.grid(False)
-        ax.set_xlim(min_val, max_val)
-        ax.set_ylim(min_val, max_val)
-        ax.plot([min_val, max_val], [min_val, max_val], "k--", alpha=0.5)
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png")
-        buf.seek(0)
-        yield buf.read()
+        return f"Pearson R (selected gene set): {r:.5f} (p={p:.5g})"
     
     @output
     @render.plot
@@ -427,6 +276,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         highlight = highlight_genes()
         merged["highlight"] = merged.index.isin(highlight)
         fig, ax = plt.subplots()
+        point_size = input.point_size() if input.point_size() else 40
         # Plot non-highlighted genes by shape
         for (sig1, sig2), marker in shape_map.items():
             mask = (merged["significant_1"] == sig1) & (merged["significant_2"] == sig2) & (~merged["highlight"])
@@ -436,6 +286,7 @@ def server(input: Inputs, output: Outputs, session: Session):
                 marker=marker,
                 c="gray",
                 alpha=0.7,
+                s=point_size,
                 label=f"1:{'Yes' if sig1 else 'No'}, 2:{'Yes' if sig2 else 'No'}"
             )
         # Plot highlighted genes by shape
@@ -448,20 +299,9 @@ def server(input: Inputs, output: Outputs, session: Session):
                 c="orange",
                 edgecolor="black",
                 alpha=0.9,
+                s=point_size + 10,
                 label=None if merged.loc[mask].empty else "Highlighted gene set"
             )
-        # Axis and legend
-        if input.show_axes():
-            ax.set_xlabel("Dataset 1 log2 fold change")
-            ax.set_ylabel("Dataset 2 log2 fold change")
-            ax.set_title("V2 Plot (Shape & Highlight)")
-        else:
-            ax.set_xlabel("")
-            ax.set_ylabel("")
-            ax.set_title("")
-            ax.set_xticks([])
-            ax.set_yticks([])
-            ax.grid(False)
         x = merged["log2_fold_change_1"]
         y = merged["log2_fold_change_2"]
         min_val = min(x.min(), y.min())
@@ -469,7 +309,6 @@ def server(input: Inputs, output: Outputs, session: Session):
         ax.set_xlim(min_val, max_val)
         ax.set_ylim(min_val, max_val)
         ax.plot([min_val, max_val], [min_val, max_val], "k--", alpha=0.5)
-        import matplotlib.lines as mlines
         handles = [
             mlines.Line2D([], [], color='gray', marker='o', linestyle='None', markersize=8, label='1:Yes, 2:Yes'),
             mlines.Line2D([], [], color='gray', marker='s', linestyle='None', markersize=8, label='1:Yes, 2:No'),
@@ -477,8 +316,33 @@ def server(input: Inputs, output: Outputs, session: Session):
             mlines.Line2D([], [], color='gray', marker='D', linestyle='None', markersize=8, label='1:No, 2:No'),
             mlines.Line2D([], [], color='orange', marker='o', markeredgecolor='black', linestyle='None', markersize=8, label='Highlighted gene set'),
         ]
-        ax.legend(handles=handles, title="Significance / Highlight", loc="best")
+        ax.legend(handles=handles, title="Significance / Highlight", loc="best")       
+         # Axis and legend
+        if input.show_axes():
+            ax.set_xlabel(input.x_axis_label() or "Dataset 1 log2 fold change")
+            ax.set_ylabel(input.y_axis_label() or "Dataset 2 log2 fold change")
+            ax.set_title(input.plot_title() or "V2 Plot (Shape & Highlight)")
+            # Add crosshair axes at x=0 and y=0
+            ax.axhline(0, color="black", linewidth=1, linestyle="--", alpha=0.7, zorder=0)
+            ax.axvline(0, color="black", linewidth=1, linestyle="--", alpha=0.7, zorder=0)
+        else:
+            ax.set_xlabel("Dataset 1 log2 fold change")
+            ax.set_ylabel("Dataset 2 log2 fold change")
+            ax.set_title("V2 Plot (Shape & Highlight)")
         return fig
+
+    @output
+    @render.text
+    def pearson_r_value():
+        d1, d2 = df1(), df2()
+        if d1 is None or d2 is None:
+            return "Upload both datasets to calculate Pearson R."
+        merged = pd.merge(d1, d2, left_index=True, right_index=True, suffixes=("_1", "_2"))
+        # Use log2_fold_change columns for correlation
+        if "log2_fold_change_1" not in merged or "log2_fold_change_2" not in merged:
+            return "log2_fold_change columns not found in both datasets."
+        r, p = pearsonr(merged["log2_fold_change_1"], merged["log2_fold_change_2"])
+        return f"Pearson R: {r:.5f} (p={p:.5g})"
 
     @output
     @render.download(filename="v2_shape_highlight_plot.png")
@@ -552,6 +416,21 @@ def server(input: Inputs, output: Outputs, session: Session):
         fig.savefig(buf, format="png")
         buf.seek(0)
         yield buf.read()
+        
+        # Axis and legend
+            
+        if input.show_axes():
+            ax.set_xlabel(input.x_axis_label() or "Dataset 1 log2 fold change")
+            ax.set_ylabel(input.y_axis_label() or "Dataset 2 log2 fold change")
+            ax.set_title(input.plot_title() or "V2 Plot (Shape & Highlight)")
+            # Add crosshair axes at x=0 and y=0
+            ax.axhline(0, color="black", linewidth=1, linestyle="-", alpha=0.7, zorder=0)
+            ax.axvline(0, color="black", linewidth=1, linestyle="-", alpha=0.7, zorder=0)
+        else:
+            ax.set_xlabel("Dataset 1 log2 fold change")
+            ax.set_ylabel("Dataset 2 log2 fold change")
+            ax.set_title("V2 Plot (Shape & Highlight)")
+        return fig
     @output
     @render_widget
     def v2_shape_highlight_plotly():
