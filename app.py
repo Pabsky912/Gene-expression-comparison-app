@@ -15,9 +15,8 @@ import io
 all_gseapy_libraries = gp.get_library_name()
 
 # If different organisms, use ortholog mapping
-ortho_path = r"c:\Users\Lenovo\OneDrive\Documentos\Bioinformatics\ensembl99_human_mouse_orthologs (1).csv"
+ortho_path = "ensembl99_human_mouse_orthologs (1).csv"
 ortho_df = pd.read_csv(ortho_path)
-# Uppercase for matching
 ortho_df["Gene name"] = ortho_df["Gene name"].str.upper()
 ortho_df["Human gene name"] = ortho_df["Human gene name"].str.upper()
 
@@ -42,7 +41,7 @@ app_ui = ui.page_fluid(
             ui.nav_panel(
                 "Data",
                 output_widget("v2_shape_highlight_plotly"),
-                ui.card(ui.output_text("pearson_r_value"),ui.output_text("pearson_r_selected_gene_set")),
+                ui.card(ui.output_text("pearson_r_value"),ui.output_text("pearson_r_selected_gene_set")), ui.output_text("pearson_r_enriched_genes"),
                     # Second: radio buttons row (full width)
                 ui.hr(),    
                 ui.input_radio_buttons(
@@ -61,13 +60,13 @@ app_ui = ui.page_fluid(
                 ui.panel_conditional(
                     "input.gene_set_source === 'Upload'",
                     ui.input_file("user_gene_set", "Upload gene set", accept=[".csv", ".txt", ".xls", ".xlsx"]),
-                    ui.input_text("search_gene", "Search and highlight gene on plot:", value=""),
+                    ui.input_selectize("search_gene", "Search and highlight gene on plot:", choices=[], multiple=True),
                 ),
                 ui.panel_conditional(
                     "input.gene_set_source === 'Database'",
                     ui.input_select(
                         "db_library",
-                        "Choose library",
+                        "Choose Database Library",
                         choices=["Enrichr", "MsigDB"]
                     ),
                     ui.panel_conditional(
@@ -81,7 +80,7 @@ app_ui = ui.page_fluid(
                         ui.input_select(
                             "organism",
                             "Select organism for gene set libraries",
-                            choices=["Human", "Mouse"],
+                            choices=["Human", "Mouse", "Yeast", "Fly", "Fish", "Worm"],
                             selected="Mouse"
                         ),
                         ui.input_selectize(
@@ -91,13 +90,14 @@ app_ui = ui.page_fluid(
                             multiple=True,
                         ),
                     ),
+                    
                     ui.panel_conditional(
                         "input.db_library === 'MsigDB'",
                         ui.input_select(
                             "msigdb_version",
                             "Select MsigDB version",
-                            choices=[],  # Will be updated reactively
-                            selected=None
+                            choices=[], 
+                            selected='2025.1.Mm'
                         ),
                         ui.input_select(
                             "msigdb_library",
@@ -119,11 +119,11 @@ app_ui = ui.page_fluid(
                         "enrich_significance",
                         "Which genes to use for enrichment?",
                         choices={
-                            "Significant in Dataset 1": "d1",
-                            "Significant in Dataset 2": "d2",
-                            "Significant in Both": "both",
+                            "d1": "Significant in Dataset 1",
+                            "d2": "Significant in Dataset 2",
+                            "both": "Significant in Both",
                         },
-                        selected="both",
+                        selected=None,
                         inline=True
                     ),
                     ui.input_select(
@@ -132,7 +132,10 @@ app_ui = ui.page_fluid(
                         choices=all_gseapy_libraries,
                         selected="GO_Biological_Process_2023" if "GO_Biological_Process_2023" in all_gseapy_libraries else all_gseapy_libraries[0]
                     ),
-                    ui.input_action_button("run_enrichr", "Run Enrichr Analysis")
+                    ui.input_action_button("run_enrichr", "Run Enrichment"),
+                    ui.input_selectize("enriched_gene_set", "Select enriched gene set", choices=[], multiple=True),
+                    ui.markdown("**Enrichment Results:**"),
+                    ui.output_table("enrichr_results"),
                 ),
             ),
             ui.nav_panel(
@@ -166,10 +169,10 @@ app_ui = ui.page_fluid(
                     "join_method",
                     "Join datasets by:",
                     choices={
-                        "Gene stable ID": "Gene Stable ID",
-                        "Gene name": "Gene Name"
+                        "Gene Stable ID": "Gene Stable ID",
+                        "Gene Name": "Gene Name"
                     },
-                    selected=['Gene Name'],  # Default to gene ID
+                    selected= "Gene Name",
                     inline=True
                 ),
                 ui.markdown("**Merged Dataset Preview:**"),
@@ -182,8 +185,6 @@ app_ui = ui.page_fluid(
                 ui.output_table("preview1"),
                 ui.markdown("**Preview dataset 2:**"),
                 ui.output_table("preview2"),
-                ui.markdown("**Enrichr Results:**"),
-                ui.output_table("enrichr_results"),
                 ui.markdown("**All genes in both datasets list for gene set highlighting**"),
                 ui.output_table("head_all_genes"),
                 ui.markdown("**Enrichr Mouse Gene Sets (head):**"),
@@ -208,12 +209,13 @@ def server(input: Inputs, output: Outputs, session: Session):
         ext = os.path.splitext(path)[1].lower()
         try:
             if ext in [".csv", ".txt"]:
-                df = pd.read_csv(path, sep=None, engine="python", index_col=0)
+                df = pd.read_csv(path, sep=None, engine="python")
             elif ext in [".xls", ".xlsx"]:
-                df = pd.read_excel(path, index_col=0)
+                df = pd.read_excel(path)
             else:
                 return None
-            df.index = df.index.astype(str).str.upper()
+            if 'gene_name' in df.columns:
+                df['gene_name'] = df['gene_name'].astype(str).str.upper()
             return df
         
         except Exception as e:
@@ -236,47 +238,77 @@ def server(input: Inputs, output: Outputs, session: Session):
         genes = set()
         if d1 is not None and d1.shape[0] > 0:
             d1 = d1.copy()
-            genes.update(pd.Series(d1.index).dropna().astype(str).str.upper().unique())
+            genes.update(pd.Series(d1['gene_name']).dropna().astype(str).str.upper().unique())
         if d2 is not None and d2.shape[0] > 0:
             d2 = d2.copy()
-            genes.update(pd.Series(d2.index).dropna().astype(str).str.upper().unique())
+            genes.update(pd.Series(d2['gene_name']).dropna().astype(str).str.upper().unique())
         return genes
-
+    
+    @reactive.effect
+    def update_search_gene_dropdown():
+        merged_genes = merged_species_df().get('gene_name', pd.Series([])).dropna().astype(str).str.upper().unique()
+        gene_choices = list(merged_genes)
+        ui.update_selectize(
+            "search_gene",
+            choices=gene_choices[:1000],  # Show only the first 1000 initially
+            session=session,
+        )
+    
+    @reactive.Calc
+    def search_gene_list():
+        search_gene = input.search_gene()
+        if isinstance(search_gene, (list, tuple)):
+            search_gene_set = set(g.upper() for g in search_gene if g)
+        else:
+            search_gene_set = {search_gene.upper()} if search_gene else set()
+        return search_gene_set
+        
     @reactive.Calc
     def msigdb_versions():
         try:
             msig = Msigdb()
-            # Ensure this is a list of strings
-            return [str(x) for x in msig.list_dbver()]
+            df = msig.list_dbver()
+            dates = df['Name'].tolist()
+            return dates
         except Exception as e:
             print(f"Msigdb version error: {e}")
             return []
 
+    @reactive.effect
+    def update_msigdb_version_dropdown():
+        ui.update_select(
+            "msigdb_version",
+            choices=msigdb_versions(),
+            session=session,
+        )
+
     @reactive.Calc
-    def msigdb_categories():
-        version = input.msigdb_version()
+    def msigdb_libraries():
         try:
             msig = Msigdb()
-            if version and isinstance(version, str) and version.strip():
-                categories = msig.list_category(dbver=version)
-                if categories is None:
-                    return []
-                return [str(x) for x in categories]
-            else:
-                return []
+            df = msig.list_category()
+            return df
         except Exception as e:
-            print(f"Msigdb category error: {e}")
-            return []        
-        
+            print(f"Msigdb library error: {e}")
+            return []
+    
+    @reactive.effect
+    def update_msigdb_library_dropdown():
+        ui.update_select(
+            "msigdb_library",
+            choices=msigdb_libraries(),
+            session=session,
+        )
+
     @reactive.Calc
     def msigdb_gene_sets():
         # Get gene sets for selected category and version
-        version = input.msigdb_version()
-        category = input.msigdb_library()
+        version = input.msigdb_version() 
+        library = input.msigdb_library()
         try:
-            if version and category:
+            if version and library:
                 msig = Msigdb()
-                return msig.get_gmt(category=category, dbver=version)
+                return msig.get_gmt(category=library, dbver=version)
             else:
                 return {}
         except Exception as e:
@@ -288,30 +320,19 @@ def server(input: Inputs, output: Outputs, session: Session):
         # Filter gene sets to those with at least one gene in uploaded data
         genes_in_data = set(all_genes())
         gene_sets = msigdb_gene_sets()
+        if not isinstance(gene_sets, dict) or gene_sets is None:
+            gene_sets = {}
         return {
             k: v for k, v in gene_sets.items()
             if any(g.upper() in genes_in_data for g in v)
         }
-
-    @reactive.effect
-    def update_msigdb_dropdowns():
-        # Update MsigDB version dropdown
-        ui.update_select(
-            "msigdb_version",
-            choices=msigdb_versions(),
-            session=session,
-        )
-        # Update MsigDB library/category dropdown
-        ui.update_select(
-            "msigdb_library",
-            choices=msigdb_categories(),
-            session=session,
-        )
-        # Update gene set dropdown
-        gene_set_names = list(filtered_msigdb_gene_sets().keys())[:1000]
+    
+    @reactive.Effect
+    def update_msigdb_gene_set_term_dropdown():
+        terms = list(filtered_msigdb_gene_sets().keys())
         ui.update_selectize(
             "msigdb_gene_set_term",
-            choices=gene_set_names,
+            choices=terms,
             session=session,
         )
 
@@ -327,17 +348,17 @@ def server(input: Inputs, output: Outputs, session: Session):
             genes.update([g.upper() for g in filtered_msigdb_gene_sets().get(term, [])])
         return genes
 
-    # Combine MsigDB selection with other highlight sources if needed:
-    @reactive.Calc
-    def highlight_genes():
-        # Combine Enrichr, MsigDB, and uploaded genes
-        enrichr_genes = selected_gene_set()  # from Enrichr
-        msigdb_genes = selected_msigdb_gene_set()
-        uploaded_genes = user_uploaded_genes()
-        return enrichr_genes.union(msigdb_genes).union(uploaded_genes)
-
     @reactive.Calc
     def merged_species_df():
+        def get_col(df, *names, default=None):
+            """Try to get the first column that exists in df from names, else return default or raise KeyError."""
+            for n in names:
+                if n in df.columns:
+                    return df[n]
+            if default is not None:
+                return default
+            raise KeyError(f"None of columns {names} found in DataFrame columns: {df.columns}")
+
         d1, d2 = df1(), df2()
         if d1 is None or d2 is None:
             return pd.DataFrame({"Message": ["No merged data available."]})
@@ -345,115 +366,165 @@ def server(input: Inputs, output: Outputs, session: Session):
         org2 = input.organism2() if "organism2" in input else "Mouse"
         join_methods = input.join_method() if "join_method" in input else ["Gene Name"]
 
-        merged_frames = []
-
-        if "Gene Name" in join_methods:
-            merged_name = pd.merge(d1, d2, left_index=True, right_index=True, suffixes=("_1", "_2"))
-            print("Merged by Gene Name:")
-            print(merged_name)
-        if "Gene Stable ID" in join_methods:
+        if "Gene Name" in join_methods and not "Gene Stable ID" in join_methods:
+            merged_name = pd.merge(d1, d2, left_on = 'gene_name', right_on = 'gene_name', suffixes=("_1", "_2"))
+            return merged_name
+        if "Gene Stable ID" in join_methods and not "Gene Name" in join_methods:
             if org1 == org2:
                 if "gene" in d1.columns and "gene" in d2.columns:
                     merged_id = pd.merge(d1, d2, on="gene", suffixes=("_1", "_2"))
-                    print("Merged by Gene Stable ID (same organism):")
                     print(merged_id)
+                return merged_id
             elif org1 == "Mouse" and org2 == "Human":
                 # Map mouse gene to human gene using ortho_df
                 if "gene" in d1.columns:
                     d1_id = d1.copy()
-                    mapped_ids = []
-                    for g in d1_id["gene"]:
-                        match = ortho_df.loc[ortho_df["Gene stable ID"] == g, "Human gene stable ID"]
-                        mapped_ids.append(match.values[0] if not match.empty else None)
-                    d1_id["Human gene stable ID"] = mapped_ids
-                    print("Mapped Mouse Gene Stable IDs to Human:")
-                    print(d1_id[["gene", "Human gene stable ID"]])
+                    merged_ortho = pd.merge(d1_id, ortho_df, left_on="gene", right_on="Gene stable ID", how="inner")
+                    merged_id = merged_ortho.merge(d2, left_on="Human gene stable ID", right_on="gene", suffixes=("_1", "_2"))
+                else:
+                    print("Gene Not Found In Columns")
+                return merged_id
             elif org1 == "Human" and org2 == "Mouse":
                 # Map human gene to mouse gene using ortho_df
                 if "gene" in d2.columns:
-                    d2_id = d2.copy()
-                    mapped_ids = []
-                    for g in d2_id["gene"]:
-                        match = ortho_df.loc[ortho_df["Human gene stable ID"] == g, "Gene stable ID"]
-                        mapped_ids.append(match.values[0] if not match.empty else None)
-                    d2_id["Mouse gene stable ID"] = mapped_ids
-                    print("Mapped Human Gene Stable IDs to Mouse:")
-                    print(d2_id[["gene", "Mouse gene stable ID"]])
-        # Combine results if both checked
-        if len(merged_frames) == 0:
-            return pd.DataFrame({"Message": ["No merged data available."]})
-        elif len(merged_frames) == 1:
-            return merged_frames[0]
-        else:
-            merged = pd.concat(merged_frames, ignore_index=True)
-            # Remove duplicates by gene and/or index (gene name)
-            if "gene" in merged.columns and merged.index.name:
-                merged = merged.drop_duplicates(subset=["gene", merged.index.name])
-            elif "gene" in merged.columns:
-                merged = merged.drop_duplicates(subset=["gene"])
-            elif merged.index.name:
-                merged = merged.drop_duplicates(subset=[merged.index.name])
-            else:
-                merged = merged.drop_duplicates()
-            return merged
-        
-    @reactive.Calc
-    def merged_species_d():
-        d1, d2 = df1(), df2()
-        if d1 is None or d2 is None:
-            return pd.DataFrame({"Message": ["No merged data available."]})
-
-        org1 = input.organism1() if "organism1" in input else "Mouse"
-        org2 = input.organism2() if "organism2" in input else "Mouse"
-        join_methods = input.join_method() if "join_method" in input else ["Gene Name"]
-
-        # Join by gene stable ID
-        if "Gene Stable ID" in join_methods:
-            if org1 == org2:
-                # Join on 'gene' column
+                    d1_id = d1.copy()
+                    merged_ortho = pd.merge(d1_id, ortho_df, left_on="gene", right_on="Human gene stable ID", how="inner")
+                    merged_id = merged_ortho.merge(d2, left_on="Gene stable ID", right_on="gene", suffixes=("_1", "_2"))
+                else:
+                    print("Gene Not Found In Columns")
+                return merged_id
+        if "Gene Stable ID" in join_methods and "Gene Name" in join_methods:
+            # Mouse-Mouse
+            if org1 == "Mouse" and org2 == "Mouse":
                 if "gene" in d1.columns and "gene" in d2.columns:
-                    merged = pd.merge(d1, d2, on="gene", suffixes=("_1", "_2"))
-                if not merged.empty:
+                    merged_name = pd.merge(d1, d2, left_on='gene_name', right_on='gene_name', suffixes=("_1", "_2"))
+                    merged_id = pd.merge(d1, d2, on="gene", suffixes=("_1", "_2"))
 
-                    return merged
-            elif org1 == "Mouse" and org2 == "Human":
-                # Map mouse gene to human gene using ortho_df
+                    merged_name_clean = pd.DataFrame({
+                        'gene_name': get_col(merged_name, 'gene_name', 'gene_name_1', 'gene_name_2'),
+                        'gene_mouse1': get_col(merged_name, 'gene_1', 'gene'),
+                        'gene_mouse2': get_col(merged_name, 'gene_2', 'gene'),
+                        'log2_fold_change_1': get_col(merged_name, 'log2_fold_change_1'),
+                        'log2_fold_change_2': get_col(merged_name, 'log2_fold_change_2'),
+                        'padj_1': get_col(merged_name, 'padj_1'),
+                        'padj_2': get_col(merged_name, 'padj_2')
+                    })
+
+                    merged_id_clean = pd.DataFrame({
+                        'gene_name': get_col(merged_id, 'gene_name', 'gene_name_1', 'gene_name_2'),
+                        'gene_mouse1': get_col(merged_id, 'gene_1', 'gene'),
+                        'gene_mouse2': get_col(merged_id, 'gene_2', 'gene'),
+                        'log2_fold_change_1': get_col(merged_id, 'log2_fold_change_1'),
+                        'log2_fold_change_2': get_col(merged_id, 'log2_fold_change_2'),
+                        'padj_1': get_col(merged_id, 'padj_1'),
+                        'padj_2': get_col(merged_id, 'padj_2')
+                    })
+
+                    merged_nameid = pd.concat([merged_id_clean, merged_name_clean], axis=0, ignore_index=True)
+                    merged_nameid = merged_nameid.drop_duplicates(keep='first')
+                    return merged_nameid
+                else:
+                    return pd.DataFrame({"Message": ["Gene column not found."]})
+
+            # Human-Human
+            if org1 == "Human" and org2 == "Human":
+                if "gene" in d1.columns and "gene" in d2.columns:
+                    merged_name = pd.merge(d1, d2, left_on='gene_name', right_on='gene_name', suffixes=("_1", "_2"))
+                    merged_id = pd.merge(d1, d2, on="gene", suffixes=("_1", "_2"))
+
+                    merged_name_clean = pd.DataFrame({
+                        'gene_name': get_col(merged_name, 'gene_name', 'gene_name_1', 'gene_name_2'),
+                        'gene_human1': get_col(merged_name, 'gene_1', 'gene'),
+                        'gene_human2': get_col(merged_name, 'gene_2', 'gene'),
+                        'log2_fold_change_1': get_col(merged_name, 'log2_fold_change_1'),
+                        'log2_fold_change_2': get_col(merged_name, 'log2_fold_change_2'),
+                        'padj_1': get_col(merged_name, 'padj_1'),
+                        'padj_2': get_col(merged_name, 'padj_2')
+                    })
+
+                    merged_id_clean = pd.DataFrame({
+                        'gene_name': get_col(merged_id, 'gene_name', 'gene_name_1', 'gene_name_2'),
+                        'gene_human1': get_col(merged_id, 'gene_1', 'gene'),
+                        'gene_human2': get_col(merged_id, 'gene_2', 'gene'),
+                        'log2_fold_change_1': get_col(merged_id, 'log2_fold_change_1'),
+                        'log2_fold_change_2': get_col(merged_id, 'log2_fold_change_2'),
+                        'padj_1': get_col(merged_id, 'padj_1'),
+                        'padj_2': get_col(merged_id, 'padj_2')
+                    })
+
+                    merged_nameid = pd.concat([merged_id_clean, merged_name_clean], axis=0, ignore_index=True)
+                    merged_nameid = merged_nameid.drop_duplicates(keep='first')
+                    return merged_nameid
+                else:
+                    return pd.DataFrame({"Message": ["Gene column not found."]})
+
+            # Mouse-Human
+            if org1 == "Mouse" and org2 == "Human":
                 if "gene" in d1.columns:
                     d1_id = d1.copy()
-                    mapped_ids = []
-                    for g in d1_id["gene"]:
-                        match = ortho_df.loc[ortho_df["Gene stable ID"] == g, "Human gene stable ID"]
-                        mapped_ids.append(match.values[0] if not match.empty else None)
-                    d1_id["Human gene stable ID"] = mapped_ids
-                    d1_id = d1_id.dropna(subset=["Human gene stable ID"])
-                    d2_id = d2.copy()
-                    merged = pd.merge(d1_id, d2_id, left_on="Human gene stable ID", right_on="gene", suffixes=("_1", "_2"))
-                    if not merged.empty:
-                        return merged
-            elif org1 == "Human" and org2 == "Mouse":
-                # Map human gene to mouse gene using ortho_df
-                if "gene" in d2.columns:
-                    d2_id = d2.copy()
-                    mapped_ids = []
-                    for g in d2_id["gene"]:
-                        match = ortho_df.loc[ortho_df["Human gene stable ID"] == g, "Gene stable ID"]
-                        mapped_ids.append(match.values[0] if not match.empty else None)
-                    d2_id["Mouse gene stable ID"] = mapped_ids
-                    d2_id = d2_id.dropna(subset=["Mouse gene stable ID"])
+                    merged_name = pd.merge(d1, d2, left_on='gene_name', right_on='gene_name', suffixes=("_1", "_2"))
+                    merged_ortho = pd.merge(d1_id, ortho_df, left_on="gene", right_on="Gene stable ID", how="inner")
+                    merged_id = pd.merge(merged_ortho, d2, left_on="Human gene stable ID", right_on="gene", suffixes=("_1", "_2"))
+
+                    merged_name_clean = pd.DataFrame({
+                        'gene_name': get_col(merged_name, 'gene_name', 'gene_name_1', 'gene_name_2'),
+                        'gene_mouse': get_col(merged_name, 'gene_1', 'gene'),
+                        'gene_human': get_col(merged_name, 'gene_2', 'gene'),
+                        'log2_fold_change_1': get_col(merged_name, 'log2_fold_change_1'),
+                        'log2_fold_change_2': get_col(merged_name, 'log2_fold_change_2'),
+                        'padj_1': get_col(merged_name, 'padj_1'),
+                        'padj_2': get_col(merged_name, 'padj_2')
+                    })
+
+                    merged_id_clean = pd.DataFrame({
+                        'gene_name': get_col(merged_id, 'gene_name', 'gene_name_1', 'gene_name_2'),
+                        'gene_mouse': get_col(merged_id, 'gene_1', 'gene'),
+                        'gene_human': get_col(merged_id, 'gene_2', 'gene'),
+                        'log2_fold_change_1': get_col(merged_id, 'log2_fold_change_1'),
+                        'log2_fold_change_2': get_col(merged_id, 'log2_fold_change_2'),
+                        'padj_1': get_col(merged_id, 'padj_1'),
+                        'padj_2': get_col(merged_id, 'padj_2')
+                    })
+
+                    merged_nameid = pd.concat([merged_id_clean, merged_name_clean], axis=0, ignore_index=True)
+                    merged_nameid = merged_nameid.drop_duplicates(keep='first')
+                    return merged_nameid
+                else:
+                    return pd.DataFrame({"Message": ["Gene column not found."]})
+
+            # Human-Mouse
+            if org1 == "Human" and org2 == "Mouse":
+                if "gene" in d1.columns:
                     d1_id = d1.copy()
-                    merged = pd.merge(d1_id, d2_id, left_on="gene", right_on="Mouse gene stable ID", suffixes=("_1", "_2"))
-                    if not merged.empty:
-                        return merged
+                    merged_name = pd.merge(d1, d2, left_on='gene_name', right_on='gene_name', suffixes=("_1", "_2"))
+                    merged_ortho = pd.merge(d1_id, ortho_df, left_on="gene", right_on="Human gene stable ID", how="inner")
+                    merged_id = pd.merge(merged_ortho, d2, left_on="Gene stable ID", right_on="gene", suffixes=("_1", "_2"))
 
-        # Join by gene name
-        if "Gene Name" in join_methods:
-            merged = pd.merge(d1, d2, left_index = True, right_index=True, suffixes=("_1", "_2"))
-            if not merged.empty:
-                return merged
+                    merged_name_clean = pd.DataFrame({
+                        'gene_name': get_col(merged_name, 'gene_name', 'gene_name_1', 'gene_name_2'),
+                        'gene_human': get_col(merged_name, 'gene_1', 'gene'),
+                        'gene_mouse': get_col(merged_name, 'gene_2', 'gene'),
+                        'log2_fold_change_1': get_col(merged_name, 'log2_fold_change_1'),
+                        'log2_fold_change_2': get_col(merged_name, 'log2_fold_change_2'),
+                        'padj_1': get_col(merged_name, 'padj_1'),
+                        'padj_2': get_col(merged_name, 'padj_2')
+                    })
 
-        # If no merge was possible
-        return pd.DataFrame({"Message": ["No merged data available."]})
+                    merged_id_clean = pd.DataFrame({
+                        'gene_name': get_col(merged_id, 'gene_name', 'gene_name_1', 'gene_name_2'),
+                        'gene_human': get_col(merged_id, 'gene_1', 'gene'),
+                        'gene_mouse': get_col(merged_id, 'gene_2', 'gene'),
+                        'log2_fold_change_1': get_col(merged_id, 'log2_fold_change_1'),
+                        'log2_fold_change_2': get_col(merged_id, 'log2_fold_change_2'),
+                        'padj_1': get_col(merged_id, 'padj_1'),
+                        'padj_2': get_col(merged_id, 'padj_2')
+                    })
 
+                    merged_nameid = pd.concat([merged_id_clean, merged_name_clean], axis=0, ignore_index=True)
+                    merged_nameid = merged_nameid.drop_duplicates(keep='first')
+                    return merged_nameid
+                else:
+                    return pd.DataFrame({"Message": ["Gene column not found."]})
     @output
     @render.table
     def merged_preview():
@@ -461,8 +532,8 @@ def server(input: Inputs, output: Outputs, session: Session):
         if df is None or df.empty:
             return pd.DataFrame({"Message": ["No merged data available."]})
         # Show first 20 rows for preview
-        return df.head(20)
-    
+        return df.tail(20)
+
     @reactive.Calc
     def gene_set_dict():
         lib = input.gene_set_library()
@@ -520,14 +591,7 @@ def server(input: Inputs, output: Outputs, session: Session):
                 break
             data.append({"Gene Set": k, "Genes": ", ".join(v[:5]) + ("..." if len(v) > 5 else "")})
         return pd.DataFrame(data)
-    
-    @output
-    @render.table
-    def user_uploaded_gene_names():
-        genes = list(user_uploaded_genes())
-        if not genes:
-            return pd.DataFrame({"Gene": ["(No genes uploaded)"]})
-        return pd.DataFrame(genes, columns=["Gene"])
+
      
     #1. Filter gene sets to only those where all genes are present in the uploaded data    @reactive.Calc
     def filtered_gene_set_dict():
@@ -578,15 +642,28 @@ def server(input: Inputs, output: Outputs, session: Session):
             genes.update([g.upper() for g in filtered_gene_set_dict().get(term, [])])
         return genes
     
+    @output
+    @render.table
+    def user_uploaded_gene_names():
+        genes = list(user_uploaded_genes())
+        if not genes:
+            return pd.DataFrame({"Gene": ["(No genes uploaded)"]})
+        return pd.DataFrame(genes, columns=["Gene"])
+
     # Read user-uploaded gene set (first row as header, first column as gene names)
     @reactive.Calc
     def user_uploaded_genes():
         try:
             df = read_any_file(input.user_gene_set())
-            if df is None or df.index.empty:
+            if df is None or df.empty:
                 return set()
-            # Use the index for gene names, uppercase for matching
-            genes = pd.Series(df.index).dropna().astype(str).str.upper().unique()
+            # Try to find a likely gene name column
+            possible_cols = [col for col in df.columns if str(col).lower() in ["gene_name", "gene", "gene_id", "symbol"]]
+            if possible_cols:
+                genes = pd.Series(df[possible_cols[0]]).dropna().astype(str).str.upper().unique()
+            else:
+                # Use the first column if no known gene name column is found
+                genes = pd.Series(df[df.columns[0]]).dropna().astype(str).str.upper().unique()
             return set(genes)
         except Exception as e:
             print(f"Error reading user gene set: {e}")
@@ -605,10 +682,10 @@ def server(input: Inputs, output: Outputs, session: Session):
         d1, d2 = df1(), df2()
         if d1 is None or d2 is None:
             return "Upload both datasets to calculate Pearson R."
-        merged = pd.merge(d1, d2, left_index=True, right_index=True, suffixes=("_1", "_2"))
+        merged = pd.merge(d1, d2, left_on = 'gene_name', right_on = 'gene_name', suffixes=("_1", "_2"))
         highlight = highlight_genes()
         # Only keep genes in the selected gene set
-        filtered = merged.loc[merged.index.isin(highlight)].copy()
+        filtered = merged.loc[merged["gene_name"].isin(highlight)].copy()
         if filtered.shape[0] < 2:
             return "Not enough significant genes in the selected gene set."
         if "log2_fold_change_1" not in filtered or "log2_fold_change_2" not in filtered:
@@ -616,14 +693,30 @@ def server(input: Inputs, output: Outputs, session: Session):
         r, p = pearsonr(filtered["log2_fold_change_1"], filtered["log2_fold_change_2"])
         return f"Pearson R (selected gene set): {r:.5f} (p={p:.5g})"
         
+    @output
+    @render.text
+    def pearson_r_enriched_genes():
+        d1, d2 = df1(), df2()
+        if d1 is None or d2 is None:
+            return "Upload both datasets to calculate Pearson R."
+        merged = pd.merge(d1, d2, left_on='gene_name', right_on='gene_name', suffixes=("_1", "_2"))
+        enriched_genes = genes_fromenrichedgeneset()
+        filtered = merged.loc[merged["gene_name"].isin(enriched_genes)].copy()
+        if filtered.shape[0] < 2:
+            return "Not enough enriched genes for correlation."
+        if "log2_fold_change_1" not in filtered or "log2_fold_change_2" not in filtered:
+            return "log2_fold_change columns not found in both datasets."
+        r, p = pearsonr(filtered["log2_fold_change_1"], filtered["log2_fold_change_2"])
+        return f"Pearson R (enriched genes): {r:.5f} (p={p:.5g})"
+
     @reactive.Calc
     def significant_genes():
         d1, d2 = df1(), df2()
         if d1 is None or d2 is None:
             return pd.DataFrame({"Gene": [], "Source": []})
 
-        sig1 = set(d1[d1["padj"] < input.padj_threshold()].index) if "padj" in d1 else set()
-        sig2 = set(d2[d2["padj"] < input.padj_threshold()].index) if "padj" in d2 else set()
+        sig1 = set(d1[d1["padj"] < input.padj_threshold()]["gene_name"]) if "padj" in d1 else set()
+        sig2 = set(d2[d2["padj"] < input.padj_threshold()]["gene_name"]) if "padj" in d2 else set()
 
         which = input.enrich_significance() if "enrich_significance" in input else "both"
 
@@ -641,7 +734,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         genes = list(significant_genes())
         if not genes:
             return pd.DataFrame({"Message": ["No significant genes found."]})
-        lib = input.enrich_gene_set_library()  # <-- Use the new dropdown value
+        lib = input.enrich_gene_set_library()
         org = input.organism().lower()
         try:
             enr = gp.enrichr(
@@ -650,15 +743,44 @@ def server(input: Inputs, output: Outputs, session: Session):
                 organism=org,
                 outdir=None
             )
-            return enr.results.head(20)
+            enriched_results = enr.results
+            return enriched_results
         except Exception as e:
             return pd.DataFrame({"Error": [str(e)]})
 
     @output
     @render.table
     def enrichr_results():
-        return enrichr_results_df()
-            
+        return enrichr_results_df().head(20)
+    
+    @reactive.Effect
+    def enriched_gene_sets():
+        df = enrichr_results_df()
+        if df is not None and "Term" in df.columns:
+            choices = list(df["Term"].dropna().str.strip().str.upper().unique())[:1000]
+        else:
+            choices = []
+        ui.update_selectize(
+            "enriched_gene_set",
+            choices=choices,
+            session=session,
+        )
+
+    def genes_fromenrichedgeneset():
+        selected_terms = input.enriched_gene_set()
+        if not selected_terms:
+            return set()
+        df = enrichr_results_df()
+        if df is None or df.empty or "Genes" not in df.columns:
+            return set()
+        # Get genes for the selected terms
+        genes = set()
+        for term in selected_terms:
+            term_genes = df[df["Term"].str.strip().str.upper() == term]["Genes"]
+            if not term_genes.empty:
+                genes.update(term_genes.iloc[0].split(";"))
+        return set(g.strip().upper() for g in genes)
+    
     @reactive.Calc
     def enriched_term_genes():
         df = enrichr_results_df()
@@ -670,15 +792,25 @@ def server(input: Inputs, output: Outputs, session: Session):
             return all_genes
         return set()
     
+    # Combine MsigDB selection with other highlight sources if needed:
+    @reactive.Calc
+    def highlight_genes():
+        # Combine Enrichr, MsigDB, and uploaded genes
+        enrichr_genes = selected_gene_set()  # from Enrichr
+        msigdb_genes = selected_msigdb_gene_set()
+        uploaded_genes = user_uploaded_genes()
+        return enrichr_genes.union(msigdb_genes).union(uploaded_genes)
+
     @output
     @render.plot
     def v2_shape_highlight_plot():
         d1, d2 = df1(), df2()
         if d1 is None or d2 is None:
             return
-        merged = pd.merge(d1, d2, left_index=True, right_index=True, suffixes=("_1", "_2"))
+        merged = pd.merge(d1, d2, left_on = 'gene_name', right_on = 'gene_name', suffixes=("_1", "_2"))
         merged["significant_1"] = merged["padj_1"] < input.padj_threshold()
         merged["significant_2"] = merged["padj_2"] < input.padj_threshold()
+        merged["gene_name"] = merged["gene_name"].astype(str).str.upper()
         shape_map = {
             (True, True): "o",      # Circle
             (True, False): "s",     # Square
@@ -689,9 +821,9 @@ def server(input: Inputs, output: Outputs, session: Session):
             lambda x: shape_map.get(tuple(x), "o"), axis=1
         )
         highlight = highlight_genes()
-        red_highlight = enriched_term_genes()
-        merged["highlight"] = merged.index.isin(highlight)
-        merged["red_highlight"] = merged.index.isin(red_highlight)
+        red_highlight = genes_fromenrichedgeneset()
+        merged["highlight"] = merged["gene_name"].isin(highlight)
+        merged["red_highlight"] = merged["gene_name"].isin(red_highlight)
         fig, ax = plt.subplots()
         point_size = input.point_size() if input.point_size() else 9
         # Plot non-highlighted genes by shape
@@ -724,13 +856,41 @@ def server(input: Inputs, output: Outputs, session: Session):
             ax.scatter(
                 merged.loc[red_mask, "log2_fold_change_1"],
                 merged.loc[red_mask, "log2_fold_change_2"],
-                marker="o",
+                marker=marker,
                 c="red",
                 edgecolor="black",
-                alpha=1.0,
-                s=point_size + 20,
+                alpha=0.9,
+                s=point_size + 10,
                 label="Enriched gene set (red)"
             )
+        search_gene = input.search_gene()
+        if isinstance(search_gene, (list, tuple)):
+            search_gene_set = set(g.upper() for g in search_gene if g)
+        else:
+            search_gene_set = {search_gene.upper()} if search_gene else set()
+        merged["search_highlight"] = merged["gene_name"].str.upper().isin(search_gene_set)
+        if search_gene:
+            for (sig1, sig2), shape in shape_map.items():
+                mask = (merged["significant_1"] == sig1) & (merged["significant_2"] == sig2) & (merged["search_highlight"])
+                subset = merged[mask]
+                if not subset.empty:
+                    fig.add_trace(go.Scattergl(
+                        x=subset["log2_fold_change_1"],
+                        y=subset["log2_fold_change_2"],
+                        mode="markers+text",
+                        marker=dict(
+                            symbol=shape,
+                            color="blue",
+                            size=point_size,
+                            line=dict(width=3, color="black")
+                        ),
+                        name="Searched gene",
+                        customdata=subset[["gene_name", "padj_1", "padj_2"]],
+                        hovertemplate=...,
+                        text=subset["gene_name"],
+                        textposition="top center",
+                        showlegend=True
+                    ))
         x = merged["log2_fold_change_1"]
         y = merged["log2_fold_change_2"]
         min_val = min(x.min(), y.min())
@@ -774,7 +934,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         d1, d2 = df1(), df2()
         if d1 is None or d2 is None:
             return "Upload both datasets to calculate Pearson R."
-        merged = pd.merge(d1, d2, left_index=True, right_index=True, suffixes=("_1", "_2"))
+        merged = pd.merge(d1, d2, left_on = 'gene_name', right_on = 'gene_name', suffixes=("_1", "_2"))
         # Use log2_fold_change columns for correlation
         if "log2_fold_change_1" not in merged or "log2_fold_change_2" not in merged:
             return "log2_fold_change columns not found in both datasets."
@@ -788,7 +948,8 @@ def server(input: Inputs, output: Outputs, session: Session):
         d1, d2 = df1(), df2()
         if d1 is None or d2 is None:
             return
-        merged = pd.merge(d1, d2, left_index=True, right_index=True, suffixes=("_1", "_2"))
+        merged = pd.merge(d1, d2, left_on = 'gene_name', right_on = 'gene_name', suffixes=("_1", "_2"))
+        merged["gene_name"] = merged["gene_name"].astype(str).str.upper()
         merged["significant_1"] = merged["padj_1"] < input.padj_threshold()
         merged["significant_2"] = merged["padj_2"] < input.padj_threshold()
         shape_map = {
@@ -801,9 +962,9 @@ def server(input: Inputs, output: Outputs, session: Session):
             lambda x: shape_map.get(tuple(x), "o"), axis=1
         )
         highlight = highlight_genes()
-        red_highlight = enriched_term_genes()
-        merged["highlight"] = merged.index.isin(highlight)
-        merged["red_highlight"] = merged.index.isin(red_highlight)
+        red_highlight = genes_fromenrichedgeneset()
+        merged["highlight"] = merged['gene_name'].isin(highlight)
+        merged["red_highlight"] = merged['gene_name'].isin(red_highlight)
         fig, ax = plt.subplots()
         point_size = input.point_size() if input.point_size() else 9
         # Plot non-highlighted genes by shape
@@ -836,13 +997,37 @@ def server(input: Inputs, output: Outputs, session: Session):
             ax.scatter(
                 merged.loc[red_mask, "log2_fold_change_1"],
                 merged.loc[red_mask, "log2_fold_change_2"],
-                marker="o",
+                marker=marker,
                 c="red",
                 edgecolor="black",
                 alpha=1.0,
                 s=point_size + 20,
                 label="Enriched gene set (red)"
             )
+        search_gene = input.search_gene()
+        if isinstance(search_gene, (list, tuple)):
+            search_gene_set = set(g.upper() for g in search_gene if g)
+        else:
+            search_gene_set = {search_gene.upper()} if search_gene else set()
+        merged["search_highlight"] = merged["gene_name"].str.upper().isin(search_gene_set)
+        if search_gene_set:
+            for (sig1, sig2), marker in shape_map.items():
+                shape_mask = (
+                    (merged["significant_1"] == sig1)
+                    & (merged["significant_2"] == sig2)
+                    & (merged["gene_name"].str.upper().isin(search_gene_set))
+                )
+                if shape_mask.any():
+                    ax.scatter(
+                        merged.loc[shape_mask, "log2_fold_change_1"],
+                        merged.loc[shape_mask, "log2_fold_change_2"],
+                        marker=marker,
+                        c="blue",
+                        edgecolor="black",
+                        alpha=1.0,
+                        s=point_size + 20,
+                        label="Searched gene"
+                    )
         x = merged["log2_fold_change_1"]
         y = merged["log2_fold_change_2"]
         min_val = min(x.min(), y.min())
@@ -890,10 +1075,10 @@ def server(input: Inputs, output: Outputs, session: Session):
         if d1 is None or d2 is None:
             return
 
-        merged = pd.merge(d1, d2, left_index=True, right_index=True, suffixes=("_1", "_2"))
-        merged["gene_name"] = merged.index
+        merged = merged_species_df()
         merged["significant_1"] = merged["padj_1"] < input.padj_threshold()
         merged["significant_2"] = merged["padj_2"] < input.padj_threshold()
+        merged["gene_name"] = merged["gene_name"].astype(str).str.upper()
         shape_map = {
             (True, True): "circle",
             (True, False): "square",
@@ -904,15 +1089,13 @@ def server(input: Inputs, output: Outputs, session: Session):
             lambda x: shape_map.get(tuple(x), "o"), axis=1
         )
         highlight = highlight_genes()
-        red_highlight = enriched_term_genes()  # <-- Get the set of enriched genes
-        merged["highlight"] = merged.index.isin(highlight)
-        merged["red_highlight"] = merged.index.isin(red_highlight)  # <-- Add this line
+        red_highlight = genes_fromenrichedgeneset()
+        blue_highlight = search_gene_list()
+        merged["highlight"] = merged["gene_name"].isin(highlight)
+        merged["red_highlight"] = merged["gene_name"].isin(red_highlight)  
         merged["color"] = merged["highlight"].map({True: "orange", False: "gray"})
-
-        # Search gene logic
-        search_gene = input.search_gene().strip().upper()
-        merged["search_highlight"] = merged.index.str.upper() == search_gene if search_gene else False
-
+        merged['blue_highlight'] = merged['gene_name'].isin(blue_highlight)
+        
         # For legend grouping
         sig_labels = {
             (True, True): "1:Yes, 2:Yes",
@@ -989,7 +1172,7 @@ def server(input: Inputs, output: Outputs, session: Session):
             red_mask = merged["significant_2"] & merged["red_highlight"]
         else:  # both
             red_mask = merged["significant_1"] & merged["significant_2"] & merged["red_highlight"]
-
+    # Plot enriched genes (red)
         for (sig1, sig2), shape in shape_map.items():
             mask = (merged["significant_1"] == sig1) & (merged["significant_2"] == sig2) & red_mask
             subset = merged[mask]
@@ -1018,36 +1201,36 @@ def server(input: Inputs, output: Outputs, session: Session):
                     ),
                     showlegend=True
                 ))
-            # Plot searched gene (blue)
-        search_mask = merged["search_highlight"]
-        if search_mask.any():
-            subset = merged[search_mask]
-            fig.add_trace(go.Scattergl(
-                x=subset["log2_fold_change_1"],
-                y=subset["log2_fold_change_2"],
-                mode="markers+text",
-                marker=dict(
-                    symbol="star",
-                    color="blue",
-                    size=point_size + 10,
-                    line=dict(width=3, color="black")
-                ),
-                name="Searched gene",
-                customdata=subset[["gene_name", "padj_1", "padj_2"]],
-                hovertemplate=(
-                    "<b>Searched Gene</b><br>"
-                    "Gene: %{customdata[0]}<br>"
-                    "log2FC 1: %{x:.3f}<br>"
-                    "log2FC 2: %{y:.3f}<br>"
-                    "padj 1: %{customdata[1]:.3g}<br>"
-                    "padj 2: %{customdata[2]:.3g}<br>"
-                    "<extra></extra>"
-                ),
-                text=subset["gene_name"],
-                textposition="top center",
-                showlegend=True
-            ))
-
+        # Plot searched gene (blue)
+        for (sig1, sig2), shape in shape_map.items():
+            mask = (merged["significant_1"] == sig1) & (merged["significant_2"] == sig2) & (merged["blue_highlight"])
+            subset = merged[mask]
+            if not subset.empty:
+                fig.add_trace(go.Scattergl(
+                    x=subset["log2_fold_change_1"],
+                    y=subset["log2_fold_change_2"],
+                    mode="markers+text",
+                    marker=dict(
+                        symbol=shape,
+                        color="blue",
+                        size=point_size,
+                        line=dict(width=3, color="black")
+                    ),
+                    name="Searched gene",
+                    customdata=subset[["gene_name", "padj_1", "padj_2"]],
+                    hovertemplate=(
+                        "<b>Searched Gene</b><br>"
+                        "Gene: %{customdata[0]}<br>"
+                        "log2FC 1: %{x:.3f}<br>"
+                        "log2FC 2: %{y:.3f}<br>"
+                        "padj 1: %{customdata[1]:.3g}<br>"
+                        "padj 2: %{customdata[2]:.3g}<br>"
+                        "<extra></extra>"
+                    ),
+                    text=subset["gene_name"],
+                    textposition="top center",
+                    showlegend=True
+                ))
         # Diagonal line
         min_val = min(merged["log2_fold_change_1"].min(), merged["log2_fold_change_2"].min())
         max_val = max(merged["log2_fold_change_1"].max(), merged["log2_fold_change_2"].max())
