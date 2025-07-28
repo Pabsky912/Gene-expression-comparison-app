@@ -20,12 +20,10 @@ ortho_df = pd.read_csv(ortho_path)
 ortho_df["Gene name"] = ortho_df["Gene name"].str.upper()
 ortho_df["Human gene name"] = ortho_df["Human gene name"].str.upper()
 
-# Read the file
-#mousediv10 = pd.read_excel("C:\Users\Lenovo\OneDrive\Documentos\Bioinformatics\mouse_div10.xlsx" , index_col=0)
-#mousediv4 = pd.read_excel("C:\Users\Lenovo\OneDrive\Documentos\Bioinformatics\mouse_div4.xlsx" , index_col=0)
-#humn = pd.read_excel("C:\Users\Lenovo\OneDrive\Documentos\Bioinformatics\human_esc.xlsx" , index_col=0)
+
 
 app_ui = ui.page_fluid(
+    ui.include_css("custom.css"),
     ui.layout_sidebar(
         ui.sidebar(
             ui.h5("Graph Controls"),
@@ -40,8 +38,9 @@ app_ui = ui.page_fluid(
         ui.navset_tab(
             ui.nav_panel(
                 "Data",
-                output_widget("v2_shape_highlight_plotly"),
-                ui.card(ui.output_text("pearson_r_value"),ui.output_text("pearson_r_selected_gene_set")), ui.output_text("pearson_r_enriched_genes"),
+                ui.card(output_widget("v2_shape_highlight_plotly")),
+                ui.hr(), 
+                ui.card(ui.markdown("### Pearson Correlation"),ui.output_text("pearson_r_value"),ui.output_text("pearson_r_selected_gene_set"), ui.output_text("pearson_r_enriched_genes")),
                     # Second: radio buttons row (full width)
                 ui.hr(),    
                 ui.input_radio_buttons(
@@ -59,8 +58,7 @@ app_ui = ui.page_fluid(
                 # Panel conditionals for radio buttons
                 ui.panel_conditional(
                     "input.gene_set_source === 'Upload'",
-                    ui.input_file("user_gene_set", "Upload gene set", accept=[".csv", ".txt", ".xls", ".xlsx"]),
-                    ui.input_selectize("search_gene", "Search and highlight gene on plot:", choices=[], multiple=True),
+                    ui.card(ui.input_file("user_gene_set", "Upload gene set", accept=[".csv", ".txt", ".xls", ".xlsx"]), ui.input_selectize("search_gene", "Search and highlight gene on plot:", choices=[], multiple=True)),
                 ),
                 ui.panel_conditional(
                     "input.gene_set_source === 'Database'",
@@ -71,71 +69,77 @@ app_ui = ui.page_fluid(
                     ),
                     ui.panel_conditional(
                         "input.db_library === 'Enrichr'",
-                        ui.input_select(
-                            "gene_set_library",
-                            "Select gene set library",
-                            choices=all_gseapy_libraries,
-                            selected="GO_Biological_Process_2023" if "GO_Biological_Process_2023" in all_gseapy_libraries else all_gseapy_libraries[0]
-                        ),
-                        ui.input_select(
-                            "organism",
-                            "Select organism for gene set libraries",
-                            choices=["Human", "Mouse", "Yeast", "Fly", "Fish", "Worm"],
-                            selected="Mouse"
-                        ),
-                        ui.input_selectize(
-                            "gene_set_term",
-                            "Select a gene set",
-                            choices=[],
-                            multiple=True,
+                        ui.card(
+                            ui.input_select(
+                                "gene_set_library",
+                                "Select gene set library",
+                                choices=all_gseapy_libraries,
+                                selected="GO_Biological_Process_2023" if "GO_Biological_Process_2023" in all_gseapy_libraries else all_gseapy_libraries[0]
+                            ),
+                            ui.input_select(
+                                "organism",
+                                "Select organism for gene set libraries",
+                                choices=["Human", "Mouse", "Yeast", "Fly", "Fish", "Worm"],
+                                selected="Mouse"
+                            ),
+                            ui.input_selectize(
+                                "gene_set_term",
+                                "Select a gene set",
+                                choices=[],
+                                multiple=True,
+                            ),
                         ),
                     ),
                     
                     ui.panel_conditional(
                         "input.db_library === 'MsigDB'",
-                        ui.input_select(
-                            "msigdb_version",
-                            "Select MsigDB version",
-                            choices=[], 
-                            selected='2025.1.Mm'
-                        ),
-                        ui.input_select(
-                            "msigdb_library",
-                            "Select MsigDB library",
-                            choices=[],  # Will be updated reactively
-                            selected=None
-                        ),
-                        ui.input_selectize(
-                            "msigdb_gene_set_term",
-                            "Select a gene set",
-                            choices=[],
-                            multiple=True,
+                        ui.card(
+                            ui.input_select(
+                                "msigdb_version",
+                                "Select MsigDB version",
+                                choices=[], 
+                                selected='2025.1.Mm'
+                            ),
+                            ui.input_select(
+                                "msigdb_library",
+                                "Select MsigDB library",
+                                choices=[],  # Will be updated reactively
+                                selected=None
+                            ),
+                            ui.input_selectize(
+                                "msigdb_gene_set_term",
+                                "Select a gene set",
+                                choices=[],
+                                multiple=True,
+                            ),
                         ),
                     )
                 ),
                 ui.panel_conditional(
                     "input.gene_set_source === 'Enrichment'",
-                    ui.input_radio_buttons(
-                        "enrich_significance",
-                        "Which genes to use for enrichment?",
-                        choices={
-                            "d1": "Significant in Dataset 1",
-                            "d2": "Significant in Dataset 2",
-                            "both": "Significant in Both",
-                        },
-                        selected=None,
-                        inline=True
-                    ),
-                    ui.input_select(
-                        "enrich_gene_set_library",
-                        "Gene set library for enrichment:",
-                        choices=all_gseapy_libraries,
-                        selected="GO_Biological_Process_2023" if "GO_Biological_Process_2023" in all_gseapy_libraries else all_gseapy_libraries[0]
-                    ),
-                    ui.input_action_button("run_enrichr", "Run Enrichment"),
-                    ui.input_selectize("enriched_gene_set", "Select enriched gene set", choices=[], multiple=True),
-                    ui.markdown("**Enrichment Results:**"),
-                    ui.output_table("enrichr_results"),
+                    ui.card(
+                        ui.input_radio_buttons(
+                            "enrich_significance",
+                            "Which genes to use for enrichment?",
+                            choices={
+                                "d1": "Significant in Dataset 1",
+                                "d2": "Significant in Dataset 2",
+                                "both": "Significant in Both",
+                            },
+                            selected=None,
+                            inline=True
+                        ),
+                        ui.input_select(
+                            "enrich_gene_set_library",
+                            "Gene set library for enrichment:",
+                            choices=all_gseapy_libraries,
+                            selected="GO_Biological_Process_2023" if "GO_Biological_Process_2023" in all_gseapy_libraries else all_gseapy_libraries[0]
+                        ),
+                        ui.input_action_button("run_enrichr", "Run Enrichment")
+                        ),
+                    ui.card(
+                        ui.panel_conditional("input.run_enrichr > 0", ui.input_selectize("enriched_gene_set", "Select enriched gene set", choices=[], multiple=True), ui.markdown("**Enrichment Results:**"), ui.output_table("enrichr_results"))
+                    )
                 ),
             ),
             ui.nav_panel(
@@ -176,26 +180,34 @@ app_ui = ui.page_fluid(
                     inline=True
                 ),
                 ui.markdown("**Merged Dataset Preview:**"),
-                ui.output_table("merged_preview"),
+                ui.card(ui.output_table("merged_preview")),
             ),
             ui.nav_panel(
                 "About & Gene Lists for potential errors",
-                ui.markdown("*This is a panel for displaying information about the datasets and potential issues with gene lists.*"),
-                ui.markdown("**Preview dataset 1:**"),
-                ui.output_table("preview1"),
-                ui.markdown("**Preview dataset 2:**"),
-                ui.output_table("preview2"),
-                ui.markdown("**All genes in both datasets list for gene set highlighting**"),
-                ui.output_table("head_all_genes"),
-                ui.markdown("**Enrichr Mouse Gene Sets (head):**"),
-                ui.output_table("head_mouse_gene_sets"),
-                ui.markdown("**Enrichr Human Gene Sets (head):**"),
-                ui.output_table("head_human_gene_sets"),
-                ui.markdown("**Filtered Gene Sets (head):**"),
-                ui.output_table("filtered_gene_sets_preview"),
-                ui.markdown("**User Uploaded Gene Names:**"),
-                ui.output_table("user_uploaded_gene_names"),
-            ),
+                ui.markdown("""
+                ## How to Format Your Dataset
+
+                Please upload your gene expression data as a CSV, Excel, or TXT file with **at least these columns**:
+                - `gene_name`: gene symbol/name (e.g., TP53)
+                - `gene`: **(optional)** stable gene ID (e.g., ENSG00000141510)
+                - `log2_fold_change`: numeric fold change value
+                - `padj`: adjusted p-value for significance
+
+                The table below shows a sample of the required format:
+                """),
+                ui.card(ui.output_table("sample_dataset_format")),
+                ui.layout_columns(
+                    ui.column(
+                        6,
+                        ui.markdown("**Preview dataset 1:**"), ui.output_table("preview1"),
+                    ),
+                    ui.column(
+                        6,
+                        ui.markdown("**Preview dataset 2:**"), ui.output_table("preview2")
+                    )
+                ),
+                ui.card(ui.markdown("**User Uploaded Gene Names:**"), ui.output_table("user_uploaded_gene_names")),
+            )
         )
     )
 )
@@ -253,15 +265,6 @@ def server(input: Inputs, output: Outputs, session: Session):
             choices=gene_choices[:1000],  # Show only the first 1000 initially
             session=session,
         )
-    
-    @reactive.Calc
-    def search_gene_list():
-        search_gene = input.search_gene()
-        if isinstance(search_gene, (list, tuple)):
-            search_gene_set = set(g.upper() for g in search_gene if g)
-        else:
-            search_gene_set = {search_gene.upper()} if search_gene else set()
-        return search_gene_set
         
     @reactive.Calc
     def msigdb_versions():
@@ -365,8 +368,13 @@ def server(input: Inputs, output: Outputs, session: Session):
         org1 = input.organism1() if "organism1" in input else "Mouse"
         org2 = input.organism2() if "organism2" in input else "Mouse"
         join_methods = input.join_method() if "join_method" in input else ["Gene Name"]
-
-        if "Gene Name" in join_methods and not "Gene Stable ID" in join_methods:
+        
+        if "gene_name" in d1.columns and "gene_name" in d2.columns and not "gene" in d1.columns and not "gene" in d2.columns:
+            merged = pd.merge(d1, d2, left_on='gene_name', right_on='gene_name', suffixes=("_1", "_2"))
+            return merged
+        elif "gene" in d1.columns and "gene" in d2.columns and not "gene_name" in d1.columns and not "gene_name" in d2.columns:
+            return "Please add a gene_name title to a column in your datasets"
+        elif "Gene Name" in join_methods and not "Gene Stable ID" in join_methods:
             merged_name = pd.merge(d1, d2, left_on = 'gene_name', right_on = 'gene_name', suffixes=("_1", "_2"))
             return merged_name
         if "Gene Stable ID" in join_methods and not "Gene Name" in join_methods:
@@ -547,6 +555,18 @@ def server(input: Inputs, output: Outputs, session: Session):
     
     @output
     @render.table
+    def sample_dataset_format():
+        # Example structure for user-uploaded datasets
+        data = {
+            "gene_name": ["TP53", "EGFR", "BRCA1", "MYC", "CDKN2A"],
+            "gene": ["ENSG00000141510", "ENSG00000146648", "ENSG00000012048", "ENSG00000136997", "ENSG00000147889"],
+            "log2_fold_change": [1.23, -0.85, 0.56, 2.10, -1.34],
+            "padj": [0.01, 0.04, 0.20, 0.03, 0.05]
+        }
+        return pd.DataFrame(data)
+
+    @output
+    @render.table
     def preview1():
         df = df1()
         if df is not None:
@@ -561,13 +581,6 @@ def server(input: Inputs, output: Outputs, session: Session):
             return df.head(10).reset_index()  # Show index as a column
         return None
     
-    #tab for all gene lists - all genes, gpseea mouse and human gene sets
-    @output
-    @render.table
-    def head_all_genes():
-        genes = list(all_genes())
-        return pd.DataFrame(genes[:10], columns=["Gene"])
-
     @output
     @render.table
     def head_mouse_gene_sets():
@@ -691,7 +704,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         if "log2_fold_change_1" not in filtered or "log2_fold_change_2" not in filtered:
             return "log2_fold_change columns not found in both datasets."
         r, p = pearsonr(filtered["log2_fold_change_1"], filtered["log2_fold_change_2"])
-        return f"Pearson R (selected gene set): {r:.5f} (p={p:.5g})"
+        return f"Pearson R for highlighted gene set: {r:.5f} (p={p:.5g})"
         
     @output
     @render.text
@@ -707,7 +720,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         if "log2_fold_change_1" not in filtered or "log2_fold_change_2" not in filtered:
             return "log2_fold_change columns not found in both datasets."
         r, p = pearsonr(filtered["log2_fold_change_1"], filtered["log2_fold_change_2"])
-        return f"Pearson R (enriched genes): {r:.5f} (p={p:.5g})"
+        return f"Pearson R values for enriched genes: {r:.5f} (p={p:.5g})"
 
     @reactive.Calc
     def significant_genes():
@@ -939,7 +952,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         if "log2_fold_change_1" not in merged or "log2_fold_change_2" not in merged:
             return "log2_fold_change columns not found in both datasets."
         r, p = pearsonr(merged["log2_fold_change_1"], merged["log2_fold_change_2"])
-        return f"Pearson R: {r:.5f} (p={p:.5g})"
+        return f"Pearson R values between both datasets: {r:.5f} (p={p:.5g})"
 
     @output
     @render.download(filename="v2_shape_highlight_plot.png")
@@ -1089,12 +1102,11 @@ def server(input: Inputs, output: Outputs, session: Session):
             lambda x: shape_map.get(tuple(x), "o"), axis=1
         )
         highlight = highlight_genes()
+        search_genes = input.search_gene()
         red_highlight = genes_fromenrichedgeneset()
-        blue_highlight = search_gene_list()
         merged["highlight"] = merged["gene_name"].isin(highlight)
         merged["red_highlight"] = merged["gene_name"].isin(red_highlight)  
         merged["color"] = merged["highlight"].map({True: "orange", False: "gray"})
-        merged['blue_highlight'] = merged['gene_name'].isin(blue_highlight)
         
         # For legend grouping
         sig_labels = {
@@ -1201,36 +1213,46 @@ def server(input: Inputs, output: Outputs, session: Session):
                     ),
                     showlegend=True
                 ))
-        # Plot searched gene (blue)
-        for (sig1, sig2), shape in shape_map.items():
-            mask = (merged["significant_1"] == sig1) & (merged["significant_2"] == sig2) & (merged["blue_highlight"])
-            subset = merged[mask]
-            if not subset.empty:
-                fig.add_trace(go.Scattergl(
-                    x=subset["log2_fold_change_1"],
-                    y=subset["log2_fold_change_2"],
-                    mode="markers+text",
-                    marker=dict(
-                        symbol=shape,
-                        color="blue",
-                        size=point_size,
-                        line=dict(width=3, color="black")
-                    ),
-                    name="Searched gene",
-                    customdata=subset[["gene_name", "padj_1", "padj_2"]],
-                    hovertemplate=(
-                        "<b>Searched Gene</b><br>"
-                        "Gene: %{customdata[0]}<br>"
-                        "log2FC 1: %{x:.3f}<br>"
-                        "log2FC 2: %{y:.3f}<br>"
-                        "padj 1: %{customdata[1]:.3g}<br>"
-                        "padj 2: %{customdata[2]:.3g}<br>"
-                        "<extra></extra>"
-                    ),
-                    text=subset["gene_name"],
-                    textposition="top center",
-                    showlegend=True
-                ))
+
+        if search_genes:
+            # Ensure search_genes is a list of uppercase strings
+            if isinstance(search_genes, str):
+                search_genes = [search_genes]
+            search_genes_set = set(g.upper() for g in search_genes if g)
+            merged["search_highlight"] = merged["gene_name"].str.upper().isin(search_genes_set)
+            for (sig1, sig2), shape in shape_map.items():
+                mask = (
+                    (merged["significant_1"] == sig1)
+                    & (merged["significant_2"] == sig2)
+                    & (merged["search_highlight"])
+                )
+                subset = merged[mask]
+                if not subset.empty:
+                    fig.add_trace(go.Scattergl(
+                        x=subset["log2_fold_change_1"],
+                        y=subset["log2_fold_change_2"],
+                        mode="markers+text",
+                        marker=dict(
+                            symbol=shape,
+                            color="blue",
+                            size=point_size,
+                            line=dict(width=3, color="black")
+                        ),
+                        name="Searched gene",
+                        customdata=subset[["gene_name", "padj_1", "padj_2"]],
+                        hovertemplate=(
+                            "<b>Searched Gene</b><br>"
+                            "Gene: %{customdata[0]}<br>"
+                            "log2FC 1: %{x:.3f}<br>"
+                            "log2FC 2: %{y:.3f}<br>"
+                            "padj 1: %{customdata[1]:.3g}<br>"
+                            "padj 2: %{customdata[2]:.3g}<br>"
+                            "<extra></extra>"
+                        ),
+                        text=subset["gene_name"],
+                        textposition="top center",
+                        showlegend=True
+                    ))
         # Diagonal line
         min_val = min(merged["log2_fold_change_1"].min(), merged["log2_fold_change_2"].min())
         max_val = max(merged["log2_fold_change_1"].max(), merged["log2_fold_change_2"].max())
