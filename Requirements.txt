@@ -9,3 +9,6 @@ plotly.express
 jinja2
 gseapy
 openpyxl
+plotly
+shinywidgets
+lxml
