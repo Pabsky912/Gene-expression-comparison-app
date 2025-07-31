@@ -1,3 +1,4 @@
+from requests import session
 from shiny import App, ui, render, reactive, Inputs, Outputs, Session
 import pandas as pd
 import matplotlib
@@ -20,7 +21,23 @@ ortho_df = pd.read_csv(ortho_path)
 ortho_df["Gene name"] = ortho_df["Gene name"].str.upper()
 ortho_df["Human gene name"] = ortho_df["Human gene name"].str.upper()
 
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+session_storage = {}
+
+def save_uploaded_file(file_info):
+    if not file_info:
+        return None
+    path = file_info[0]["datapath"]
+    filename = file_info[0]["name"]
+    save_path = os.path.join(UPLOAD_DIR, filename)
+    with open(path, "rb") as src, open(save_path, "wb") as dst:
+        dst.write(src.read())
+    return save_path
+
+def list_uploaded_files():
+    return [f for f in os.listdir(UPLOAD_DIR) if os.path.isfile(os.path.join(UPLOAD_DIR, f))]
 
 app_ui = ui.page_fluid(
     ui.include_css("custom.css"),
@@ -79,7 +96,7 @@ app_ui = ui.page_fluid(
                             ui.input_select(
                                 "organism",
                                 "Select organism for gene set libraries",
-                                choices=["Human", "Mouse", "Yeast", "Fly", "Fish", "Worm"],
+                                choices=["Human", "Mouse"],
                                 selected="Mouse"
                             ),
                             ui.input_selectize(
@@ -207,12 +224,61 @@ app_ui = ui.page_fluid(
                     )
                 ),
                 ui.card(ui.markdown("**User Uploaded Gene Names:**"), ui.output_table("user_uploaded_gene_names")),
-            )
+            ),
+            ui.nav_panel(
+                "Saved Dataset Manager",
+                ui.card(
+                    ui.layout_columns(
+                        ui.column(
+                            6,
+                            ui.input_file("upload_new_dataset", "Upload new dataset", accept=[".csv", ".txt", ".xls", ".xlsx"]),
+                        ),
+                        ui.column(
+                            6,
+                            ui.input_action_button("save_dataset", "Save to server"),
+                        )
+                    )
+                ),
+                ui.card(
+                    ui.markdown("**Available datasets:**"),
+                    ui.layout_columns(
+                        ui.column(
+                            6,
+                            ui.output_table("available_datasets")
+                        ),
+                        ui.column(
+                            6,
+                            ui.input_select("selected_dataset", "Choose dataset for analysis", choices=[])
+                        )
+                    )
+                ),
+                ui.card(
+                    ui.layout_columns(
+                        ui.column(
+                            6,
+                            ui.input_action_button("use_as_dataset1", "Use as Dataset 1"),
+                        ),
+                        ui.column(
+                            6,
+                            ui.input_action_button("use_as_dataset2", "Use as Dataset 2")
+                        )
+                    )
+                ),
+                ui.card(ui.markdown("**Selected Preview:**"),ui.output_table("selected_dataset_preview")),
+                ui.card(ui.h4("Debug Info"), ui.output_text("debug_info"))
+            ),
         )
     )
 )
 
 def server(input: Inputs, output: Outputs, session: Session):
+    session_id = str(id(session))
+    if session_id not in session_storage:
+        session_storage[session_id] = {}
+    
+    last_dataset1_id = reactive.Value(0)
+    last_dataset2_id = reactive.Value(0)
+    dataset_selection = reactive.Value(0)
 
     def read_any_file(file_info):
         if not file_info:
@@ -236,12 +302,58 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     @reactive.Calc
     def df1():
+        dataset_selection()  # Just reading the value creates the dependency
+        session_id = str(id(session))
+        path = session_storage.get(session_id, {}).get("file1_path")
+        if path and os.path.exists(path):
+            ext = os.path.splitext(path)[1].lower()
+            try:
+                if ext in [".csv", ".txt"]:
+                    df = pd.read_csv(path, sep=None, engine="python")
+                elif ext in [".xls", ".xlsx"]:
+                    df = pd.read_excel(path)
+                else:
+                    return None
+                if 'gene_name' in df.columns:
+                    df['gene_name'] = df['gene_name'].astype(str).str.upper()
+                return df
+            except Exception as e:
+                print(f"Error reading file {path}: {e}")
+                return None
+        # Fallback to uploaded file
         return read_any_file(input.file1())
-
     @reactive.Calc
     def df2():
+        dataset_selection()
+        session_id = str(id(session))
+        path = session_storage.get(session_id, {}).get("file2_path")
+        if path and os.path.exists(path):
+            ext = os.path.splitext(path)[1].lower()
+            try:
+                if ext in [".csv", ".txt"]:
+                    df = pd.read_csv(path, sep=None, engine="python")
+                elif ext in [".xls", ".xlsx"]:
+                        df = pd.read_excel(path)
+                else:
+                    return None
+                if 'gene_name' in df.columns:
+                    df['gene_name'] = df['gene_name'].astype(str).str.upper()
+                return df
+            except Exception as e:
+                print(f"Error reading file {path}: {e}")
+                return None
         return read_any_file(input.file2())
     
+    @output
+    @render.text
+    def debug_info():
+        session_id = str(id(session))
+        path1 = session_storage.get(session_id, {}).get("file1_path", "None")
+        path2 = session_storage.get(session_id, {}).get("file2_path", "None")
+        d1 = "Loaded" if df1() is not None else "None"
+        d2 = "Loaded" if df2() is not None else "None"
+        return f"Dataset 1 path: {path1}\nDataset 2 path: {path2}\ndf1: {d1}\ndf2: {d2}"
+
     #Creating set of all genes from both datasets
     @reactive.Calc
     def all_genes():
@@ -256,15 +368,45 @@ def server(input: Inputs, output: Outputs, session: Session):
             genes.update(pd.Series(d2['gene_name']).dropna().astype(str).str.upper().unique())
         return genes
     
+    @reactive.Calc
+    def search_gene_set():
+        """Return a set of uppercase gene names from the search input"""
+        search_genes = input.search_gene()
+        if not search_genes:
+            return set()
+            
+        # Handle both string and list inputs consistently
+        if isinstance(search_genes, str):
+            search_genes = [search_genes]
+            
+        # Return as a set of uppercase gene names
+        return set(g.upper() for g in search_genes if g)
+
     @reactive.effect
     def update_search_gene_dropdown():
-        merged_genes = merged_species_df().get('gene_name', pd.Series([])).dropna().astype(str).str.upper().unique()
-        gene_choices = list(merged_genes)
+        d1 = df1()
+        d2 = df2()
+        if d1 is None or d2 is None:
+            ui.update_selectize("search_gene", choices=[], session=session)
+            return
+            
+        # Get genes from both datasets independently (more efficient)
+        genes1 = set(pd.Series(d1['gene_name']).dropna().astype(str).str.upper())
+        genes2 = set(pd.Series(d2['gene_name']).dropna().astype(str).str.upper())
+        
+        # Find genes in both datasets
+        common_genes = list(genes1.intersection(genes2))
+        
+        # Sort alphabetically for better UX
+        common_genes.sort()
+        
+        # Limit to first 1000 to prevent UI slowdowns
         ui.update_selectize(
             "search_gene",
-            choices=gene_choices[:1000],  # Show only the first 1000 initially
+            choices=common_genes[:1000],
             session=session,
         )
+
         
     @reactive.Calc
     def msigdb_versions():
@@ -350,7 +492,41 @@ def server(input: Inputs, output: Outputs, session: Session):
         for term in terms:
             genes.update([g.upper() for g in filtered_msigdb_gene_sets().get(term, [])])
         return genes
-
+    
+    @reactive.Effect
+    def use_selected_as_dataset1():
+        # Only run if button was actually clicked (not due to reactivity)
+        current_click_id = input.use_as_dataset1()
+        if current_click_id > 0 and current_click_id != last_dataset1_id() and input.selected_dataset():
+            # Remember this click ID to avoid repeating
+            last_dataset1_id.set(current_click_id)
+            
+            # Store the path
+            session_id = str(id(session))
+            session_storage.setdefault(session_id, {})["file1_path"] = os.path.join(UPLOAD_DIR, input.selected_dataset())
+            
+            # Trigger reactivity by incrementing counter - this needs to be last
+            dataset_selection.set(dataset_selection() + 1)
+            
+            # Show confirmation message exactly once
+            ui.notification_show(f"Dataset '{input.selected_dataset()}' set as Dataset 1", type="message")
+    @reactive.Effect
+    def use_selected_as_dataset2():
+        # Only run if button was actually clicked (not due to reactivity)
+        current_click_id = input.use_as_dataset2()
+        if current_click_id > 0 and current_click_id != last_dataset2_id() and input.selected_dataset():
+            # Remember this click ID to avoid repeating
+            last_dataset2_id.set(current_click_id)
+            
+            # Store the path
+            session_id = str(id(session))
+            session_storage.setdefault(session_id, {})["file2_path"] = os.path.join(UPLOAD_DIR, input.selected_dataset())
+            
+            # Trigger reactivity by incrementing counter - this needs to be last
+            dataset_selection.set(dataset_selection() + 1)
+            
+            # Show confirmation message exactly once
+            ui.notification_show(f"Dataset '{input.selected_dataset()}' set as Dataset 2", type="message")
     @reactive.Calc
     def merged_species_df():
         def get_col(df, *names, default=None):
@@ -533,6 +709,50 @@ def server(input: Inputs, output: Outputs, session: Session):
                     return merged_nameid
                 else:
                     return pd.DataFrame({"Message": ["Gene column not found."]})
+    @reactive.Effect
+    def save_dataset_effect():
+        if input.save_dataset() > 0 and input.upload_new_dataset():
+            save_uploaded_file(input.upload_new_dataset())
+    
+    @output
+    @render.table
+    def available_datasets():
+        files = list_uploaded_files()
+        return pd.DataFrame({"Filename": files})
+
+    @reactive.Effect
+    def update_selected_dataset_dropdown():
+        files = list_uploaded_files()
+        ui.update_select("selected_dataset", choices=files, session=session)
+
+    def read_selected_dataset():
+        filename = input.selected_dataset()
+        if not filename:
+            return None
+        path = os.path.join(UPLOAD_DIR, filename)
+        ext = os.path.splitext(path)[1].lower()
+        try:
+            if ext in [".csv", ".txt"]:
+                df = pd.read_csv(path, sep=None, engine="python")
+            elif ext in [".xls", ".xlsx"]:
+                df = pd.read_excel(path)
+            else:
+                return None
+            if 'gene_name' in df.columns:
+                df['gene_name'] = df['gene_name'].astype(str).str.upper()
+            return df
+        except Exception as e:
+            print(f"Error reading selected dataset {path}: {e}")
+            return None
+
+    @output
+    @render.table
+    def selected_dataset_preview():
+        df = read_selected_dataset()
+        if df is not None:
+            return df.head(10)
+        return pd.DataFrame({"Message": ["No dataset selected."]})
+    
     @output
     @render.table
     def merged_preview():
@@ -615,16 +835,6 @@ def server(input: Inputs, output: Outputs, session: Session):
             if any(g.upper() in genes_in_data for g in v)
         }
     
-    @output
-    @render.table
-    def filtered_gene_sets_preview():
-        # Show the first 10 filtered gene sets
-        data = []
-        for i, (k, v) in enumerate(filtered_gene_set_dict().items()):
-            if i >= 10:
-                break
-            data.append({"Gene Set": k, "Genes": ", ".join(v[:5]) + ("..." if len(v) > 5 else "")})
-        return pd.DataFrame(data)
      
     # 2. Update the dropdown to show only these gene sets (limit to 1000)
     @reactive.effect
@@ -1017,7 +1227,7 @@ def server(input: Inputs, output: Outputs, session: Session):
                 s=point_size + 20,
                 label="Enriched gene set (red)"
             )
-        search_gene = input.search_gene()
+        search_gene = search_gene_set()
         if isinstance(search_gene, (list, tuple)):
             search_gene_set = set(g.upper() for g in search_gene if g)
         else:
@@ -1102,7 +1312,7 @@ def server(input: Inputs, output: Outputs, session: Session):
             lambda x: shape_map.get(tuple(x), "o"), axis=1
         )
         highlight = highlight_genes()
-        search_genes = input.search_gene()
+        search_genes = search_gene_set()
         red_highlight = genes_fromenrichedgeneset()
         merged["highlight"] = merged["gene_name"].isin(highlight)
         merged["red_highlight"] = merged["gene_name"].isin(red_highlight)  
@@ -1215,16 +1425,11 @@ def server(input: Inputs, output: Outputs, session: Session):
                 ))
 
         if search_genes:
-            # Ensure search_genes is a list of uppercase strings
-            if isinstance(search_genes, str):
-                search_genes = [search_genes]
-            search_genes_set = set(g.upper() for g in search_genes if g)
-            merged["search_highlight"] = merged["gene_name"].str.upper().isin(search_genes_set)
             for (sig1, sig2), shape in shape_map.items():
                 mask = (
-                    (merged["significant_1"] == sig1)
-                    & (merged["significant_2"] == sig2)
-                    & (merged["search_highlight"])
+                    (merged["significant_1"] == sig1) 
+                    & (merged["significant_2"] == sig2) 
+                    & (merged["gene_name"].isin(search_genes))
                 )
                 subset = merged[mask]
                 if not subset.empty:
